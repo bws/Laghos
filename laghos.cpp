@@ -71,6 +71,11 @@ using namespace mfem;
 // Choice for the problem setup.
 static int problem, dim;
 
+// BWS IOTime accumulator
+double iotime = 0.0;
+int iostepbegin = 10;
+int iostepfreq = 5;
+
 // Forward declarations.
 double e0(const Vector &);
 double rho0(const Vector &);
@@ -636,6 +641,8 @@ int main(int argc, char *argv[])
    //      }
    //      cout << endl;
    //   }
+   double tbeg, tend;
+   tbeg = MPI_Wtime();
    for (int ti = 1; !last_step; ti++)
    {
       if (t + dt >= t_final)
@@ -695,29 +702,6 @@ int main(int argc, char *argv[])
          }
          // const double internal_energy = hydro.InternalEnergy(e_gf);
          // const double kinetic_energy = hydro.KineticEnergy(v_gf);
-         if (mpi.Root())
-         {
-            const double sqrt_norm = sqrt(norm);
-
-            cout << std::fixed;
-            cout << "step " << std::setw(5) << ti
-                 << ",\tt = " << std::setw(5) << std::setprecision(4) << t
-                 << ",\tdt = " << std::setw(5) << std::setprecision(6) << dt
-                 << ",\t|e| = " << std::setprecision(10) << std::scientific
-                 << sqrt_norm;
-            //  << ",\t|IE| = " << std::setprecision(10) << std::scientific
-            //  << internal_energy
-            //   << ",\t|KE| = " << std::setprecision(10) << std::scientific
-            //  << kinetic_energy
-            //   << ",\t|E| = " << std::setprecision(10) << std::scientific
-            //  << kinetic_energy+internal_energy;
-            cout << std::fixed;
-            if (mem_usage)
-            {
-               cout << ", mem: " << mmax << "/" << msum << " MB";
-            }
-            cout << endl;
-         }
 
          // Make sure all ranks have sent their 'v' solution before initiating
          // another set of GLVis connections (one from each rank):
@@ -751,34 +735,87 @@ int main(int argc, char *argv[])
             visit_dc.Save();
          }
 
-         if (gfprint)
+	 //BWS std::cerr << "IOStep begin: " << ti << " " << iostepbegin << " " << (ti % iostepfreq) << endl;
+         if (gfprint && (ti >= iostepbegin) && (0 == ti % iostepfreq))
          {
+            double begtime, endtime;
+	    begtime = MPI_Wtime();
             std::ostringstream mesh_name, rho_name, v_name, e_name;
-            mesh_name << basename << "_" << ti << "_mesh";
-            rho_name  << basename << "_" << ti << "_rho";
-            v_name << basename << "_" << ti << "_v";
-            e_name << basename << "_" << ti << "_e";
 
-            std::ofstream mesh_ofs(mesh_name.str().c_str());
-            mesh_ofs.precision(8);
-            pmesh->PrintAsOne(mesh_ofs);
-            mesh_ofs.close();
+	    //BWS -- set the mesh name to the OS null device
+	    if ("null" == basename) {
+		std::ofstream nulldev_ofs("/dev/null");
 
-            std::ofstream rho_ofs(rho_name.str().c_str());
-            rho_ofs.precision(8);
-            rho_gf.SaveAsOne(rho_ofs);
-            rho_ofs.close();
+		// Unbuffer the stream
+		nulldev_ofs.rdbuf()->pubsetbuf(0,0);
 
-            std::ofstream v_ofs(v_name.str().c_str());
-            v_ofs.precision(8);
-            v_gf.SaveAsOne(v_ofs);
-            v_ofs.close();
+		// Write everything to the nullstream
+                pmesh->PrintAsOne(nulldev_ofs);
+                rho_gf.SaveAsOne(nulldev_ofs);
+                v_gf.SaveAsOne(nulldev_ofs);
+                e_gf.SaveAsOne(nulldev_ofs);
+		nulldev_ofs.close();
 
-            std::ofstream e_ofs(e_name.str().c_str());
-            e_ofs.precision(8);
-            e_gf.SaveAsOne(e_ofs);
-            e_ofs.close();
+	    } else {
+                mesh_name << basename << "_" << ti << "_mesh";
+                rho_name  << basename << "_" << ti << "_rho";
+                v_name << basename << "_" << ti << "_v";
+                e_name << basename << "_" << ti << "_e";
+             
+                std::ofstream mesh_ofs(mesh_name.str().c_str());
+                mesh_ofs.precision(8);
+                pmesh->PrintAsOne(mesh_ofs);
+                mesh_ofs.close();
+
+                std::ofstream rho_ofs(rho_name.str().c_str());
+                rho_ofs.precision(8);
+                rho_gf.SaveAsOne(rho_ofs);
+                rho_ofs.close();
+
+                std::ofstream v_ofs(v_name.str().c_str());
+                v_ofs.precision(8);
+                v_gf.SaveAsOne(v_ofs);
+                v_ofs.close();
+
+                std::ofstream e_ofs(e_name.str().c_str());
+                e_ofs.precision(8);
+                e_gf.SaveAsOne(e_ofs);
+                e_ofs.close();
+	    }
+	    endtime = MPI_Wtime();
+	    iotime += (endtime - begtime);
          }
+
+	 tend = MPI_Wtime();
+         if (mpi.Root())
+         {
+            const double sqrt_norm = sqrt(norm);
+
+            cout << std::fixed;
+            cout << "step " << std::setw(5) << ti
+                 << ",\tt = " << std::setw(5) << std::setprecision(4) << t
+                 << ",\tdt = " << std::setw(5) << std::setprecision(6) << dt
+                 << ",\t|e| = " << std::setprecision(10) << std::scientific
+                 << sqrt_norm
+                 << ",\telapsed = " << std::fixed << std::setw(5) << std::setprecision(4) << (tend - tbeg);
+            //  << ",\t|IE| = " << std::setprecision(10) << std::scientific
+            //  << internal_energy
+            //   << ",\t|KE| = " << std::setprecision(10) << std::scientific
+            //  << kinetic_energy
+            //   << ",\t|E| = " << std::setprecision(10) << std::scientific
+            //  << kinetic_energy+internal_energy;
+            cout << std::fixed;
+            if (mem_usage)
+            {
+               cout << ", mem: " << mmax << "/" << msum << " MB";
+            }
+            cout << endl;
+         }
+         tbeg = MPI_Wtime();
+
+
+      } else {
+	      tbeg = tend = MPI_Wtime();
       }
 
       // Problems checks
@@ -851,6 +888,17 @@ int main(int argc, char *argv[])
    {
       vis_v.close();
       vis_e.close();
+   }
+
+   if (iotime > 0.0) {
+	   int rank;
+	   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	   double totaltime = 0.0;
+	   MPI_Reduce(&iotime, &totaltime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+           if (0 == rank) {
+	       std::cerr.precision(8);
+	       std::cerr << "Total output IOTime: " << iotime << " secs" << endl;
+	   }
    }
 
    // Free the used memory.
